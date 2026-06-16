@@ -117,16 +117,18 @@
     .top-order-row { display: flex; flex-wrap: nowrap; gap: 0.5rem; overflow-x: auto; padding-bottom: 0.5rem; }
     .order-chip { display: flex; flex-direction: column; align-items: center; gap: 0.3rem; background: #111; border: 1px solid rgba(187,185,185,0.15); border-radius: 8px; padding: 0.5rem 0.6rem; white-space: nowrap; flex-shrink: 0; min-width: 36px; }
     .order-pick-num { font-size: 0.7rem; color: #BBB9B9; font-weight: 700; }
-    .order-logo { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; }
+    .order-logo-wrap { position: relative; width: 40px; height: 40px; border-radius: 50%; overflow: hidden; flex-shrink: 0; }
+    .order-chip-locked .order-logo-wrap::after { content: ''; position: absolute; inset: 0; border-radius: 50%; background: rgba(0, 118, 182, 0.35); pointer-events: none; }
+    .order-logo { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; display: block; }
     .order-team-name { font-size: 0.7rem; color: #cbd5e1; font-weight: 500; text-align: center; white-space: normal; line-height: 1.2; }
     .banner-toggle { display: flex; background: #0a0a0a; border-radius: 5px; overflow: hidden; border: 1px solid rgba(187,185,185,0.3); }
     .banner-tab { background: transparent; color: #888; border: none; padding: 0.2rem 0.65rem; font-size: 0.75rem; cursor: pointer; border-radius: 0; transition: background 0.15s, color 0.15s; }
     .banner-tab:hover { color: #BBB9B9; }
     .banner-tab-active { background: #0076B6; color: #ffffff; }
     .order-adp { font-size: 0.7rem; color: #888; font-weight: 600; }
-    .order-chip-locked { background: #0f2e1a; border: 1px solid #166534; }
-    .order-chip-locked .order-pick-num { color: #4ade80; }
-    .order-chip-locked .order-team-name { color: #86efac; }
+    .order-chip-locked { background: #161622; border: 1px solid #0076B6; }
+    .order-chip-locked .order-pick-num { color: #21affc; }
+    .order-chip-locked .order-team-name { color: #21affc; }
 
     .hidden { display: none !important; }
     #dd-full { margin-top: 0.6rem; background: #050505; border: 1px solid rgba(187,185,185,0.15); border-radius: 6px; overflow: hidden; }
@@ -765,9 +767,11 @@ function runMonteCarlo(state, N = 10000) {
 
   const probs = {};
   const adp = {};
+  const adpVariance = {};
   for (const t of teams) {
     probs[t] = counts[t].map(c => (c / N) * 100);
     adp[t] = counts[t].reduce((sum, c, i) => sum + c * (i + 1), 0) / N;
+    adpVariance[t] = counts[t].reduce((sum, c, i) => sum + c * (i + 1) ** 2, 0) / N - adp[t] ** 2;
   }
 
   const topOrders = Object.entries(orderCounts)
@@ -775,7 +779,7 @@ function runMonteCarlo(state, N = 10000) {
     .slice(0, 10)
     .map(([key, cnt]) => ({ order: key.split('|'), pct: (cnt / N) * 100 }));
 
-  return { probs, topOrders, adp };
+  return { probs, topOrders, adp, adpVariance };
 }
 
 // ─── CURRENT BEST ESTIMATE (deterministic) ──────────────────────────────────
@@ -822,7 +826,7 @@ function heatColor(pct) {
 // ─── TOP ORDERS RENDER ───────────────────────────────────────────────────────
 const LOCK_THRESHOLD = 99; // % — position is considered locked in
 
-function renderTopOrders(topOrders, probs, adp) {
+function renderTopOrders(topOrders, probs, adp, adpVariance) {
   if (!topOrders || !adp) return;
 
   const isAdp = orderBannerMode === 'adp';
@@ -832,9 +836,10 @@ function renderTopOrders(topOrders, probs, adp) {
     const sorted = Object.keys(adp).sort((a, b) => adp[a] - adp[b]);
     chips = sorted.map((team) => {
       const src = `assets/teams/${encodeURIComponent(team)}.png`;
-      return `<div class="order-chip">
+      const locked = adpVariance && (adpVariance[team] ?? 1) < 0.1;
+      return `<div class="order-chip ${locked ? 'order-chip-locked' : ''}">
         <span class="order-pick-num">${adp[team].toFixed(1)}</span>
-        <img class="order-logo" src="${src}" alt="${team}" onerror="this.style.display='none'">
+        <div class="order-logo-wrap"><img class="order-logo" src="${src}" alt="${team}" onerror="this.style.display='none'"></div>
         <span class="order-team-name">${team}</span>
       </div>`;
     }).join('');
@@ -845,7 +850,7 @@ function renderTopOrders(topOrders, probs, adp) {
       const locked = probs && (probs[team]?.[i] ?? 0) >= LOCK_THRESHOLD;
       return `<div class="order-chip ${locked ? 'order-chip-locked' : ''}">
         <span class="order-pick-num">${i + 1}</span>
-        <img class="order-logo" src="${src}" alt="${team}" onerror="this.style.display='none'">
+        <div class="order-logo-wrap"><img class="order-logo" src="${src}" alt="${team}" onerror="this.style.display='none'"></div>
         <span class="order-team-name">${team}</span>
       </div>`;
     }).join('');
@@ -866,8 +871,8 @@ function renderTopOrders(topOrders, probs, adp) {
       <span class="top-order-label">${isAdp ? 'Average Draft Position' : 'Most Common Draft Order'}</span>
       ${!isAdp ? `<span class="top-order-pct">${topOrders[0].pct.toFixed(2)}%</span>` : ''}
       <div class="banner-toggle">
-        <button class="banner-tab ${isAdp ? 'banner-tab-active' : ''}" onclick="orderBannerMode='adp'; renderTopOrders(lastTopOrders, lastProbs, lastAdp)">Avg Position</button>
-        <button class="banner-tab ${!isAdp ? 'banner-tab-active' : ''}" onclick="orderBannerMode='likely'; renderTopOrders(lastTopOrders, lastProbs, lastAdp)">Most Common</button>
+        <button class="banner-tab ${isAdp ? 'banner-tab-active' : ''}" onclick="orderBannerMode='adp'; renderTopOrders(lastTopOrders, lastProbs, lastAdp, lastAdpVariance)">Avg Position</button>
+        <button class="banner-tab ${!isAdp ? 'banner-tab-active' : ''}" onclick="orderBannerMode='likely'; renderTopOrders(lastTopOrders, lastProbs, lastAdp, lastAdpVariance)">Most Common</button>
       </div>
       ${!isAdp ? `<button class="top-order-toggle" onclick="document.getElementById('dd-full').classList.toggle('hidden')">Top 10 ▾</button>` : ''}
     </div>
@@ -916,7 +921,7 @@ function renderGrid(probs, currentEstimate, state, sortCol = currentSortCol) {
     th.addEventListener('click', () => {
       currentSortCol = parseInt(th.dataset.pick);
       if (lastProbs) renderGrid(lastProbs, lastEstimate, lastState, currentSortCol);
-      if (lastTopOrders) renderTopOrders(lastTopOrders, lastProbs, lastAdp);
+      if (lastTopOrders) renderTopOrders(lastTopOrders, lastProbs, lastAdp, lastAdpVariance);
     });
   });
 
@@ -1001,6 +1006,7 @@ let isRunning = false;
 let lastProbs = null;
 let lastTopOrders = null;
 let lastAdp = null;
+let lastAdpVariance = null;
 let orderBannerMode = 'adp'; // 'adp' | 'likely'
 let lastEstimate = null;
 let lastState = null;
@@ -1035,15 +1041,16 @@ async function refresh() {
     // Run simulation asynchronously so browser can update the status text
     await new Promise(resolve => setTimeout(resolve, 30));
 
-    const { probs, topOrders, adp } = runMonteCarlo(state, 10000);
+    const { probs, topOrders, adp, adpVariance } = runMonteCarlo(state, 10000);
     const currentEstimate = getBestEstimate(state);
 
     lastProbs = probs;
     lastTopOrders = topOrders;
     lastAdp = adp;
+    lastAdpVariance = adpVariance;
     lastEstimate = currentEstimate;
     lastState = state;
-    renderTopOrders(topOrders, probs, adp);
+    renderTopOrders(topOrders, probs, adp, adpVariance);
     renderGrid(probs, currentEstimate, state, currentSortCol);
 
     const now = new Date();
