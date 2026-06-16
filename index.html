@@ -98,6 +98,33 @@
 
     .error { color: #f87171; padding: 2rem; font-size: 0.9rem; }
 
+    #top-orders { padding: 0.75rem 2rem; border-bottom: 1px solid #1e293b; }
+    .top-order-header { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem; }
+    .top-order-label { font-size: 0.75rem; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; }
+    .top-order-pct { font-size: 0.75rem; color: #34d399; font-weight: 700; }
+    .top-order-toggle { background: #1e293b; color: #94a3b8; border: none; padding: 0.2rem 0.6rem; border-radius: 4px; cursor: pointer; font-size: 0.72rem; }
+    .top-order-toggle:hover { background: #334155; color: #e2e8f0; }
+
+    .top-order-row { display: flex; flex-wrap: nowrap; gap: 0.5rem; overflow-x: auto; padding-bottom: 0.5rem; }
+    .order-chip { display: flex; flex-direction: column; align-items: center; gap: 0.3rem; background: #1e293b; border-radius: 8px; padding: 0.5rem 0.6rem; white-space: nowrap; flex-shrink: 0; min-width: 36px; }
+    .order-pick-num { font-size: 0.65rem; color: #475569; font-weight: 700; }
+    .order-logo { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; }
+    .order-team-name { font-size: 0.65rem; color: #cbd5e1; font-weight: 500; text-align: center; white-space: normal; line-height: 1.2; }
+    .order-chip-locked { background: #0f2e1a; border: 1px solid #166534; }
+    .order-chip-locked .order-pick-num { color: #4ade80; }
+    .order-chip-locked .order-team-name { color: #86efac; }
+
+    .hidden { display: none !important; }
+    #dd-full { margin-top: 0.6rem; background: #0a1628; border: 1px solid #1e293b; border-radius: 6px; overflow: hidden; }
+    .dd-header { padding: 0.4rem 0.75rem; font-size: 0.7rem; color: #475569; border-bottom: 1px solid #1e293b; }
+    .dd-row { display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.4rem 0.75rem; border-bottom: 1px solid #0f172a; font-size: 0.68rem; }
+    .dd-row:last-child { border-bottom: none; }
+    .dd-row-top { background: #0f1f2a; }
+    .dd-rank { color: #475569; font-weight: 700; min-width: 2rem; flex-shrink: 0; }
+    .dd-pct { color: #34d399; font-weight: 700; min-width: 3.5rem; flex-shrink: 0; }
+    .dd-teams { display: flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; color: #64748b; }
+    .dd-pick { white-space: nowrap; }
+
     .spinner {
       display: inline-block;
       width: 10px; height: 10px;
@@ -148,6 +175,9 @@
       font-weight: 600;
     }
     .detail-goals { font-size: 0.65rem; color: #475569; }
+    .flag-img { width: 20px; height: 15px; border-radius: 2px; object-fit: cover; vertical-align: middle; }
+    .team-logo { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; vertical-align: middle; margin-right: 0.4rem; background: #1e293b; }
+    .team-logo-placeholder { display: inline-block; width: 22px; height: 22px; border-radius: 50%; background: #1e293b; vertical-align: middle; margin-right: 0.4rem; }
   </style>
 </head>
 <body>
@@ -161,6 +191,7 @@
     <button id="refresh-btn" onclick="refresh()" disabled>↻ Refresh</button>
     <span class="auto-refresh">Auto-refreshes every 5 min</span>
   </div>
+  <div id="top-orders"></div>
   <div class="grid-wrapper">
     <table id="grid"></table>
   </div>
@@ -173,6 +204,73 @@
   <div class="sim-info" id="sim-info"></div>
 
 <script>
+// ─── FLAG & LOGO ASSETS ─────────────────────────────────────────────────────
+const FLAG_CODE = {
+  'Iran':                 'ir',
+  'Egypt':                'eg',
+  'Saudi Arabia':         'sa',
+  'Colombia':             'co',
+  'New Zealand':          'nz',
+  'Norway':               'no',
+  'Canada':               'ca',
+  'Sweden':               'se',
+  'England':              'gb-eng',
+  'Spain':                'es',
+  'Türkiye':              'tr',
+  'Haiti':                'ht',
+  'Portugal':             'pt',
+  'Ghana':                'gh',
+  'Germany':              'de',
+  'Ivory Coast':          'ci',
+  'Netherlands':          'nl',
+  'USA':                  'us',
+  'South Korea':          'kr',
+  'Iraq':                 'iq',
+  'Tunisia':              'tn',
+  'Qatar':                'qa',
+  'Senegal':              'sn',
+  'Austria':              'at',
+  'Jordan':               'jo',
+  'Switzerland':          'ch',
+  'Australia':            'au',
+  'Belgium':              'be',
+  'Czechia':              'cz',
+  'DR Congo':             'cd',
+  'Uzbekistan':           'uz',
+  'Bosnia & Herzegovina': 'ba',
+  'France':               'fr',
+  'South Africa':         'za',
+  'Scotland':             'gb-sct',
+  'Curaçao':              'cw',
+  'Ecuador':              'ec',
+  'Mexico':               'mx',
+  'Uruguay':              'uy',
+  'Argentina':            'ar',
+  'Algeria':              'dz',
+  'Brazil':               'br',
+  'Panama':               'pa',
+  'Cabo Verde':           'cv',
+  'Japan':                'jp',
+  'Morocco':              'ma',
+  'Croatia':              'hr',
+  'Paraguay':             'py',
+};
+
+function flagUrl(country) {
+  const code = FLAG_CODE[country];
+  return code ? `https://flagcdn.com/w40/${code}.png` : null;
+}
+
+function flagImg(country) {
+  const url = flagUrl(country);
+  return url ? `<img class="flag-img" src="${url}" alt="${country}" title="${country}">` : '';
+}
+
+function teamLogoImg(fantasyTeam) {
+  const src = `assets/teams/${encodeURIComponent(fantasyTeam)}.png`;
+  return `<img class="team-logo" src="${src}" alt="${fantasyTeam}" onerror="this.style.display='none';this.nextSibling.style.display='inline-block'"><span class="team-logo-placeholder" style="display:none"></span>`;
+}
+
 // ─── FANTASY TEAM ALLOCATIONS ───────────────────────────────────────────────
 const FANTASY_TEAMS = {
   'Kurlewis':      ['Iran', 'Egypt', 'Saudi Arabia'],
@@ -596,16 +694,25 @@ function runMonteCarlo(state, N = 10000) {
   const teams = Object.keys(FANTASY_TEAMS);
   const counts = {};
   for (const t of teams) counts[t] = new Array(16).fill(0);
+  const orderCounts = {};
 
   for (let i = 0; i < N; i++) {
     const { stage, stats } = runOneSimulation(state);
     const ranked = rankFantasyTeams(stage, stats);
     ranked.forEach((team, idx) => counts[team][idx]++);
+    const key = ranked.join('|');
+    orderCounts[key] = (orderCounts[key] || 0) + 1;
   }
 
   const probs = {};
   for (const t of teams) probs[t] = counts[t].map(c => (c / N) * 100);
-  return probs;
+
+  const topOrders = Object.entries(orderCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([key, cnt]) => ({ order: key.split('|'), pct: (cnt / N) * 100 }));
+
+  return { probs, topOrders };
 }
 
 // ─── CURRENT BEST ESTIMATE (deterministic) ──────────────────────────────────
@@ -649,6 +756,46 @@ function heatColor(pct) {
   };
 }
 
+// ─── TOP ORDERS RENDER ───────────────────────────────────────────────────────
+const LOCK_THRESHOLD = 99; // % — position is considered locked in
+
+function renderTopOrders(topOrders, probs) {
+  if (!topOrders || topOrders.length === 0) return;
+  const best = topOrders[0];
+  const chips = best.order.map((team, i) => {
+    const src = `assets/teams/${encodeURIComponent(team)}.png`;
+    const locked = probs && (probs[team]?.[i] ?? 0) >= LOCK_THRESHOLD;
+    return `<div class="order-chip ${locked ? 'order-chip-locked' : ''}">
+      <span class="order-pick-num">${i + 1}</span>
+      <img class="order-logo" src="${src}" alt="${team}" onerror="this.style.display='none'">
+      <span class="order-team-name">${team}</span>
+    </div>`;
+  }).join('');
+
+  const total = topOrders.reduce((s, o) => s + o.pct, 0).toFixed(1);
+  const rows = topOrders.map((o, i) => {
+    const picks = o.order.map((t, j) => `<span class="dd-pick">${j + 1}. ${t}</span>`).join('');
+    return `<div class="dd-row ${i === 0 ? 'dd-row-top' : ''}">
+      <span class="dd-rank">#${i + 1}</span>
+      <span class="dd-pct">${o.pct.toFixed(2)}%</span>
+      <div class="dd-teams">${picks}</div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('top-orders').innerHTML = `
+    <div class="top-order-header">
+      <span class="top-order-label">Most Likely Draft Order</span>
+      <span class="top-order-pct">${best.pct.toFixed(2)}%</span>
+      <button class="top-order-toggle" onclick="document.getElementById('dd-full').classList.toggle('hidden')">Top 10 ▾</button>
+    </div>
+    <div class="top-order-row">${chips}</div>
+    <div id="dd-full" class="hidden">
+      <div class="dd-header">Top 10 most likely orderings · combined probability: <strong>${total}%</strong></div>
+      ${rows}
+    </div>
+  `;
+}
+
 // ─── RENDER ──────────────────────────────────────────────────────────────────
 const STAGE_STYLE = {
   0: { bg: '#2a1212', color: '#f87171', label: 'Group Out' },
@@ -686,6 +833,7 @@ function renderGrid(probs, currentEstimate, state, sortCol = currentSortCol) {
     th.addEventListener('click', () => {
       currentSortCol = parseInt(th.dataset.pick);
       if (lastProbs) renderGrid(lastProbs, lastEstimate, lastState, currentSortCol);
+      if (lastTopOrders) renderTopOrders(lastTopOrders, lastProbs);
     });
   });
 
@@ -697,7 +845,7 @@ function renderGrid(probs, currentEstimate, state, sortCol = currentSortCol) {
 
     const td = document.createElement('td');
     td.className = 'team-name';
-    td.innerHTML = `<span class="toggle">▶</span>${team}`;
+    td.innerHTML = `<span class="toggle">▶</span>${teamLogoImg(team)}${team}`;
 
     // Probability cells
     for (let pick = 0; pick < 16; pick++) {
@@ -733,6 +881,7 @@ function renderGrid(probs, currentEstimate, state, sortCol = currentSortCol) {
 
       inner.innerHTML += `
         <div class="detail-team">
+          ${flagImg(wc)}
           <span class="detail-team-name">${wc}</span>
           <span class="detail-stage" style="background:${style.bg};color:${style.color}">${style.label}</span>
           <span class="detail-goals">${gf} GF · ${ga} GA</span>
@@ -767,6 +916,7 @@ function buildLegend() {
 let refreshTimer = null;
 let isRunning = false;
 let lastProbs = null;
+let lastTopOrders = null;
 let lastEstimate = null;
 let lastState = null;
 let currentSortCol = null; // null = sort by peak pick, 0-15 = sort by that pick descending
@@ -800,12 +950,14 @@ async function refresh() {
     // Run simulation asynchronously so browser can update the status text
     await new Promise(resolve => setTimeout(resolve, 30));
 
-    const probs = runMonteCarlo(state, 10000);
+    const { probs, topOrders } = runMonteCarlo(state, 10000);
     const currentEstimate = getBestEstimate(state);
 
     lastProbs = probs;
+    lastTopOrders = topOrders;
     lastEstimate = currentEstimate;
     lastState = state;
+    renderTopOrders(topOrders, probs);
     renderGrid(probs, currentEstimate, state, currentSortCol);
 
     const now = new Date();
