@@ -27,7 +27,7 @@
 
     .grid-wrapper { padding: 1.25rem 2rem; overflow-x: auto; }
 
-    table { border-collapse: separate; border-spacing: 0; font-size: 0.75rem; white-space: nowrap; }
+    table { border-collapse: separate; border-spacing: 4px 0; font-size: 0.75rem; white-space: nowrap; }
 
     th {
       background: #0076B6;
@@ -122,7 +122,7 @@
     .top-order-toggle { background: #111; color: #BBB9B9; border: 1px solid rgba(187,185,185,0.2); padding: 0.2rem 0.6rem; border-radius: 4px; cursor: pointer; font-size: 0.75rem; }
     .top-order-toggle:hover { background: #1a1a1a; color: #e2e8f0; }
 
-    .top-order-row { display: flex; flex-wrap: nowrap; gap: 0; overflow-x: auto; padding-bottom: 0.5rem; align-items: stretch; }
+    .top-order-row { display: flex; flex-wrap: nowrap; gap: 4px; overflow-x: auto; padding-bottom: 0.5rem; align-items: stretch; }
     .chip-spacer { flex-shrink: 0; display: flex; align-items: stretch; }
     .sim-cost { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; gap: 0.25rem; text-align: center; padding: 0.4rem 0.5rem; border-right: 1px solid rgba(187,185,185,0.08); }
     .sim-cost-label { font-size: 0.58rem; color: #555; text-transform: uppercase; letter-spacing: 0.08em; }
@@ -881,8 +881,8 @@ function renderTopOrders(topOrders, probs, adp) {
     <div class="top-order-header">
       <span class="top-order-label">${isAdp ? 'Average Draft Position' : 'Most Common Draft Order'}</span>
       <div class="banner-toggle">
-        <button class="banner-tab ${isAdp ? 'banner-tab-active' : ''}" onclick="orderBannerMode='adp'; renderTopOrders(lastTopOrders, lastProbs, lastAdp); if(lastProbs) renderGrid(lastProbs, lastEstimate, lastState, currentSortCol); syncChipSpacer()">Avg Position</button>
-        <button class="banner-tab ${!isAdp ? 'banner-tab-active' : ''}" onclick="orderBannerMode='likely'; renderTopOrders(lastTopOrders, lastProbs, lastAdp); if(lastProbs) renderGrid(lastProbs, lastEstimate, lastState, currentSortCol); syncChipSpacer()">Most Common</button>
+        <button class="banner-tab ${isAdp ? 'banner-tab-active' : ''}" onclick="orderBannerMode='adp'; currentSortCol=0; currentSortDir='desc'; renderTopOrders(lastTopOrders, lastProbs, lastAdp); if(lastProbs) renderGrid(lastProbs, lastEstimate, lastState, currentSortCol); syncChipSpacer()">Avg Position</button>
+        <button class="banner-tab ${!isAdp ? 'banner-tab-active' : ''}" onclick="orderBannerMode='likely'; currentSortCol=null; currentSortDir=null; renderTopOrders(lastTopOrders, lastProbs, lastAdp); if(lastProbs) renderGrid(lastProbs, lastEstimate, lastState, currentSortCol); syncChipSpacer()">Most Common</button>
       </div>
       ${!isAdp ? `<span class="top-order-pct">${topOrders[0].pct.toFixed(2)}%</span><button class="top-order-toggle" onclick="document.getElementById('dd-full').classList.toggle('hidden')">Top 10 ▾</button>` : ''}
     </div>
