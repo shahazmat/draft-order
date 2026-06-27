@@ -121,6 +121,7 @@ function parseRound(event) {
 function parseTournamentState(events) {
   const groupStandings = {}, groupTeams = {}, groupGames = [];
   const allTeamStats = {}, knockoutEliminated = {}, knockoutAlive = new Set();
+  const r32Actual = [], koResults = []; // real R32 matchups + completed KO results
 
   function statsOf(name) {
     if (!allTeamStats[name]) allTeamStats[name] = { gf: 0, ga: 0 };
@@ -164,11 +165,14 @@ function parseTournamentState(events) {
       }
       groupGames.push({ home, away, hg, ag, homeWin, awayWin, done, group });
     } else {
+      // Capture real R32 matchups (resolved once groups finish) for true seeding.
+      if (round === 'R32' && TEAM_STRENGTH[home] && TEAM_STRENGTH[away]) r32Actual.push([home, away]);
       if (done && hg !== null) {
         statsOf(home).gf += hg; statsOf(home).ga += ag;
         statsOf(away).gf += ag; statsOf(away).ga += hg;
         const loser  = homeWin ? away : (awayWin ? home : null);
         const winner = homeWin ? home : (awayWin ? away : null);
+        if (winner) koResults.push({ a: home, b: away, winner });
         if (round === 'FINAL') {
           if (loser)  knockoutEliminated[loser]  = STAGE.RUNNER_UP;
           if (winner) knockoutEliminated[winner] = STAGE.WINNER;
@@ -185,7 +189,11 @@ function parseTournamentState(events) {
   }
 
   const completedCount = events.filter(e => e.competitions[0]?.status?.type?.completed).length;
-  return { groupStandings, groupTeams, groupGames, allTeamStats, knockoutEliminated, knockoutAlive, completedCount };
+  const groupsComplete = Object.keys(groupTeams).length === 12 &&
+    Object.entries(groupTeams).every(([g, set]) =>
+      set.size === 4 && [...set].every(t => (groupStandings[g]?.[t]?.gp ?? 0) >= 3));
+  return { groupStandings, groupTeams, groupGames, allTeamStats, knockoutEliminated, knockoutAlive,
+           completedCount, r32Actual, koResults, groupsComplete };
 }
 
 // ─── SIMULATION ENGINE ────────────────────────────────────────────────────────
@@ -217,6 +225,92 @@ function sortGroup(teams, standings) {
   });
 }
 
+// ─── KNOCKOUT BRACKET (FIFA 2026, canonical match numbers 73–104) ───────────────
+// Verified against ESPN matchNumber + the official bracket. Each R32 slot is either
+// a group position [groupLetter, pos] (pos 0 = winner, 1 = runner-up) or a
+// third-place berth { t: [eligible group letters] }. Later rounds reference the
+// two feeder match numbers whose winners advance. This is the path-dependency core:
+// teams flow through a FIXED tree instead of being re-shuffled each round.
+const GROUP_LETTERS = ['A','B','C','D','E','F','G','H','I','J','K','L'];
+const R32_SLOTS = {
+  73: [['A',1],['B',1]],            74: [['E',0],{t:['A','B','C','D','F']}],
+  75: [['F',0],['C',1]],            76: [['C',0],['F',1]],
+  77: [['I',0],{t:['C','D','F','G','H']}], 78: [['E',1],['I',1]],
+  79: [['A',0],{t:['C','E','F','H','I']}], 80: [['L',0],{t:['E','H','I','J','K']}],
+  81: [['D',0],{t:['B','E','F','I','J']}], 82: [['G',0],{t:['A','E','H','I','J']}],
+  83: [['K',1],['L',1]],            84: [['H',0],['J',1]],
+  85: [['B',0],{t:['E','F','G','I','J']}], 86: [['J',0],['H',1]],
+  87: [['K',0],{t:['D','E','I','J','L']}], 88: [['D',1],['G',1]],
+};
+const THIRD_BERTHS = [74,77,79,80,81,82,85,87]; // R32 matches hosting a third-placed team
+const FEEDERS = {
+  89:[74,77], 90:[73,75], 91:[76,78], 92:[79,80], 93:[83,84], 94:[81,82], 95:[86,88], 96:[85,87],
+  97:[89,90], 98:[93,94], 99:[91,92], 100:[95,96], 101:[97,98], 102:[99,100],
+};
+const SF_MATCHES = [101,102], FINAL_MATCH = 104, THIRD_PLACE_MATCH = 103;
+
+// Assign the 8 qualifying third-placed teams to the 8 berths, respecting each
+// berth's eligible-group set (no group-stage rematch). Bipartite matching with
+// randomized order via augmenting paths; any valid perfect matching is fine.
+function matchThirds(thirds) {
+  const berths = THIRD_BERTHS.map(m => ({ m, set: R32_SLOTS[m][1].t }));
+  const order = shuffle(berths.map((_, i) => i));
+  const berthThird = new Array(berths.length).fill(-1); // berth idx -> third idx
+  function augment(bi, seen) {
+    for (let ti = 0; ti < thirds.length; ti++) {
+      if (seen[ti] || !berths[bi].set.includes(thirds[ti].group)) continue;
+      seen[ti] = true;
+      const cur = berthThird.indexOf(ti);
+      if (cur === -1 || augment(cur, seen)) { berthThird[bi] = ti; return true; }
+    }
+    return false;
+  }
+  for (const bi of order) augment(bi, new Array(thirds.length).fill(false));
+  const assign = {};
+  berths.forEach((b, i) => { if (berthThird[i] !== -1) assign[b.m] = thirds[berthThird[i]].team; });
+  // Defensive: if matching was imperfect, drop leftover thirds into any open berth.
+  const usedThirds = new Set(berthThird.filter(x => x !== -1).map(i => thirds[i].team));
+  const openBerths = berths.filter(b => !assign[b.m]).map(b => b.m);
+  thirds.filter(t => !usedThirds.has(t.team)).forEach((t, i) => { if (openBerths[i]) assign[openBerths[i]] = t.team; });
+  return assign;
+}
+
+// Walk the fixed bracket. `seeded` maps each R32 match (73–88) to [team0, team1].
+// `knownWinner` maps a sorted "teamA::teamB" key to the actual winner for already
+// completed knockout games (those goals are already in base stats, so we don't
+// re-add them). Returns stage assignments for every knockout team.
+function simulateBracket(seeded, statsOf, knownWinner) {
+  const stage = {}, winner = {}, loser = {};
+  const key = (a, b) => [a, b].sort().join('::');
+  function play(m, t1, t2) {
+    const known = knownWinner[key(t1, t2)];
+    if (known) { winner[m] = known; loser[m] = known === t1 ? t2 : t1; return; }
+    const hg = poisson(goalLambda(t1)), ag = poisson(goalLambda(t2));
+    const s1 = getStrength(t1), s2 = getStrength(t2);
+    const t1wins = hg > ag || (hg === ag && rng() < s1 / (s1 + s2));
+    winner[m] = t1wins ? t1 : t2; loser[m] = t1wins ? t2 : t1;
+    statsOf(t1).gf += hg; statsOf(t1).ga += ag;
+    statsOf(t2).gf += ag; statsOf(t2).ga += hg;
+  }
+  const ROUND_STAGE = [
+    { matches: range(73, 88), elim: STAGE.R32_ELIMINATED },
+    { matches: range(89, 96), elim: STAGE.R16_ELIMINATED },
+    { matches: range(97, 100), elim: STAGE.QF_ELIMINATED },
+  ];
+  for (const m of range(73, 88)) play(m, seeded[m][0], seeded[m][1]);
+  for (const m of range(89, 100)) play(m, winner[FEEDERS[m][0]], winner[FEEDERS[m][1]]);
+  for (const { matches, elim } of ROUND_STAGE) for (const m of matches) stage[loser[m]] = elim;
+  for (const m of SF_MATCHES) play(m, winner[FEEDERS[m][0]], winner[FEEDERS[m][1]]);
+  play(THIRD_PLACE_MATCH, loser[SF_MATCHES[0]], loser[SF_MATCHES[1]]);
+  stage[winner[THIRD_PLACE_MATCH]] = STAGE.SF_WON_3RD;
+  stage[loser[THIRD_PLACE_MATCH]] = STAGE.SF_LOST_3RD;
+  play(FINAL_MATCH, winner[SF_MATCHES[0]], winner[SF_MATCHES[1]]);
+  stage[winner[FINAL_MATCH]] = STAGE.WINNER;
+  stage[loser[FINAL_MATCH]] = STAGE.RUNNER_UP;
+  return stage;
+}
+function range(a, b) { const r = []; for (let i = a; i <= b; i++) r.push(i); return r; }
+
 function runOneSimulation(state) {
   const { groupStandings: baseSt, groupTeams, groupGames, allTeamStats, knockoutEliminated, knockoutAlive } = state;
   const st = {};
@@ -245,79 +339,50 @@ function runOneSimulation(state) {
     statsOf(g.away).gf += ag; statsOf(g.away).ga += hg;
   }
 
-  const qualifiers = new Set();
+  // ── Final group standings, qualifiers, and eliminated teams ──
   const stage = {};
-  const thirdCandidates = [];
-
-  for (const [group, teamSet] of Object.entries(groupTeams)) {
-    const sorted = sortGroup([...teamSet], st[group] || {});
-    if (sorted[0]) qualifiers.add(sorted[0]);
-    if (sorted[1]) qualifiers.add(sorted[1]);
-    if (sorted[2]) {
-      const s = (st[group] || {})[sorted[2]] || { pts: 0, gf: 0, ga: 0 };
-      thirdCandidates.push({ team: sorted[2], pts: s.pts, gd: s.gf - s.ga, gf: s.gf });
+  const sorted = {};   // group letter -> [1st, 2nd, 3rd, 4th]
+  const thirds = [];   // { team, group, pts, gd, gf }
+  for (const g of GROUP_LETTERS) {
+    const teamSet = groupTeams[g];
+    if (!teamSet) continue;
+    const ranked = sortGroup([...teamSet], st[g] || {});
+    sorted[g] = ranked;
+    if (ranked[3]) stage[ranked[3]] = STAGE.GROUP_ELIMINATED;
+    if (ranked[2]) {
+      const s = (st[g] || {})[ranked[2]] || { pts: 0, gf: 0, ga: 0 };
+      thirds.push({ team: ranked[2], group: g, pts: s.pts, gd: s.gf - s.ga, gf: s.gf });
     }
-    if (sorted[3]) stage[sorted[3]] = STAGE.GROUP_ELIMINATED;
   }
+  thirds.sort((a, b) => b.pts - a.pts || b.gd - a.gd || b.gf - a.gf || rng() - 0.5);
+  const top8 = thirds.slice(0, 8);
+  for (const t of thirds.slice(8)) stage[t.team] = STAGE.GROUP_ELIMINATED; // non-qualifying thirds
 
-  thirdCandidates.sort((a, b) => {
-    if (b.pts !== a.pts) return b.pts - a.pts;
-    if (b.gd  !== a.gd)  return b.gd  - a.gd;
-    if (b.gf  !== a.gf)  return b.gf  - a.gf;
-    return rng() - 0.5;
-  });
-  for (let i = 0; i < thirdCandidates.length; i++) {
-    if (i < 8) qualifiers.add(thirdCandidates[i].team);
-    else stage[thirdCandidates[i].team] = STAGE.GROUP_ELIMINATED;
+  // ── Seed the Round of 32 into the fixed bracket ──
+  const seeded = {};
+  for (const m of range(73, 88)) {
+    seeded[m] = R32_SLOTS[m].map(slot => Array.isArray(slot) ? sorted[slot[0]]?.[slot[1]] : null);
   }
-
-  for (const [team, s] of Object.entries(knockoutEliminated)) stage[team] = s;
-
-  const alreadyElim = new Set(Object.keys(knockoutEliminated));
-  let alive = [...new Set([...qualifiers, ...knockoutAlive].filter(t => !alreadyElim.has(t)))];
-
-  let sfLosers = [];
-  for (const round of ['R32', 'R16', 'QF', 'SF']) {
-    if (alive.length < 2) break;
-    const pairs = shuffle(alive);
-    const winners = [], losers = [];
-    for (let i = 0; i + 1 < pairs.length; i += 2) {
-      const [t1, t2] = [pairs[i], pairs[i + 1]];
-      const hg = poisson(goalLambda(t1)), ag = poisson(goalLambda(t2));
-      const s1 = getStrength(t1), s2 = getStrength(t2);
-      const t1wins = hg > ag || (hg === ag && rng() < s1 / (s1 + s2));
-      winners.push(t1wins ? t1 : t2);
-      const loser = t1wins ? t2 : t1;
-      losers.push(loser);
-      if (!stage[loser]) {
-        stage[loser] = { R32: STAGE.R32_ELIMINATED, R16: STAGE.R16_ELIMINATED, QF: STAGE.QF_ELIMINATED, SF: STAGE.SF_LOST_3RD }[round];
-      }
-      statsOf(t1).gf += hg; statsOf(t1).ga += ag;
-      statsOf(t2).gf += ag; statsOf(t2).ga += hg;
+  let thirdAssign = null;
+  if (state.groupsComplete && state.r32Actual?.length) {
+    // Regime 2: groups final — use the real third-place allocation from ESPN.
+    const host = {};
+    for (const m of THIRD_BERTHS) { const [g, pos] = R32_SLOTS[m][0]; host[sorted[g]?.[pos]] = m; }
+    const a = {};
+    for (const [x, y] of state.r32Actual) {
+      if (host[x] !== undefined) a[host[x]] = y; else if (host[y] !== undefined) a[host[y]] = x;
     }
-    if (round === 'SF') sfLosers = losers;
-    alive = winners;
+    if (THIRD_BERTHS.every(m => a[m])) thirdAssign = a;
   }
+  if (!thirdAssign) thirdAssign = matchThirds(top8); // Regime 1: constrained matching
+  for (const m of THIRD_BERTHS) seeded[m][1] = thirdAssign[m];
 
-  if (sfLosers.length >= 2) {
-    const [l1, l2] = sfLosers;
-    const sl1 = getStrength(l1), sl2 = getStrength(l2);
-    if (rng() < sl1 / (sl1 + sl2)) { stage[l1] = STAGE.SF_WON_3RD; stage[l2] = STAGE.SF_LOST_3RD; }
-    else                             { stage[l2] = STAGE.SF_WON_3RD; stage[l1] = STAGE.SF_LOST_3RD; }
-  } else if (sfLosers.length === 1) {
-    stage[sfLosers[0]] = STAGE.SF_LOST_3RD;
-  }
+  // ── Already-played knockout games override simulation (goals already in stats) ──
+  const knownWinner = {};
+  for (const r of (state.koResults || [])) knownWinner[[r.a, r.b].sort().join('::')] = r.winner;
 
-  if (alive.length >= 2) {
-    const [f1, f2] = alive;
-    const hg = poisson(goalLambda(f1)), ag = poisson(goalLambda(f2));
-    const sf1 = getStrength(f1), sf2 = getStrength(f2);
-    const f1wins = hg > ag || (hg === ag && rng() < sf1 / (sf1 + sf2));
-    stage[f1wins ? f1 : f2] = STAGE.WINNER;
-    stage[f1wins ? f2 : f1] = STAGE.RUNNER_UP;
-  } else if (alive.length === 1) {
-    stage[alive[0]] = STAGE.WINNER;
-  }
+  // ── Walk the fixed bracket (path-dependent) ──
+  Object.assign(stage, simulateBracket(seeded, statsOf, knownWinner));
 
   return { stage, stats };
 }
@@ -344,15 +409,21 @@ function rankFantasyTeams(stage, stats) {
 }
 
 function runMonteCarlo(state, N = 10000) {
-  seedRng(state.completedCount * 31337);
+  // Fixed seed (NOT tied to results): the only thing that should move the numbers
+  // between snapshots is new match results, never Monte Carlo resampling noise.
+  // index.html must use this SAME constant so the live grid reconciles with the chart.
+  seedRng(20260611);
   const teams = Object.keys(FANTASY_TEAMS);
   const counts = {};
   for (const t of teams) counts[t] = new Array(16).fill(0);
+  const orderCounts = {};
 
   for (let i = 0; i < N; i++) {
     const { stage, stats } = runOneSimulation(state);
     const ranked = rankFantasyTeams(stage, stats);
     ranked.forEach((team, idx) => counts[team][idx]++);
+    const key = ranked.join('|');
+    orderCounts[key] = (orderCounts[key] || 0) + 1;
   }
 
   const probs = {}, adp = {};
@@ -360,7 +431,17 @@ function runMonteCarlo(state, N = 10000) {
     probs[t] = counts[t].map(c => parseFloat(((c / N) * 100).toFixed(2)));
     adp[t] = parseFloat((counts[t].reduce((sum, c, i) => sum + c * (i + 1), 0) / N).toFixed(3));
   }
-  return { probs, adp };
+
+  // Most common full draft orders. Ties (equal frequency) are broken by smallest
+  // total absolute deviation from ADP — the ordering closest to expectation ranks first.
+  const deviation = order => order.reduce((sum, t, i) => sum + Math.abs((i + 1) - adp[t]), 0);
+  const topOrders = Object.entries(orderCounts)
+    .map(([key, cnt]) => ({ order: key.split('|'), cnt }))
+    .sort((a, b) => b.cnt - a.cnt || deviation(a.order) - deviation(b.order))
+    .slice(0, 10)
+    .map(({ order, cnt }) => ({ order, pct: parseFloat(((cnt / N) * 100).toFixed(2)) }));
+
+  return { probs, adp, topOrders };
 }
 
 // ─── MAIN ─────────────────────────────────────────────────────────────────────
@@ -417,8 +498,8 @@ async function main() {
     });
 
     const state = parseTournamentState(modifiedEvents);
-    const { probs, adp } = runMonteCarlo(state, 10000);
-    snapshots.push({ matchesCompleted: k, probs, adp });
+    const { probs, adp, topOrders } = runMonteCarlo(state, 10000);
+    snapshots.push({ matchesCompleted: k, probs, adp, topOrders });
 
     process.stdout.write(`\r  computed snapshot ${k}/${completedEvents.length}`);
   }
@@ -433,4 +514,9 @@ async function main() {
   console.log(`Done. ${snapshots.length} snapshots written.`);
 }
 
-main().catch(err => { console.error(err); process.exit(1); });
+if (require.main === module) {
+  main().catch(err => { console.error(err); process.exit(1); });
+}
+
+module.exports = { parseTournamentState, runOneSimulation, runMonteCarlo, rankFantasyTeams,
+                   matchThirds, simulateBracket, R32_SLOTS, THIRD_BERTHS, FEEDERS, GROUP_LETTERS, STAGE };
