@@ -995,6 +995,32 @@ const KO_ROUND_FLOOR = {
 };
 const KO_ROUND_RANK = { GROUP: 0, R32: 1, R16: 2, QF: 3, SF: 4, THIRD: 4, FINAL: 5 };
 
+// Teams mathematically guaranteed an R32 berth even though the bracket isn't seeded
+// yet (their own group is fully played, but other groups aren't — so ESPN hasn't
+// published their actual R32 opponent). A team that finished TOP TWO of a completed
+// group always advances, regardless of how the rest of the tournament shakes out.
+// (Third place only qualifies as one of the 8 best thirds — not knowable until more
+// groups finish — so thirds aren't promoted here.)
+function computeGuaranteedR32(state) {
+  const out = new Set();
+  for (const [g, set] of Object.entries(state.groupTeams)) {
+    const gs = state.groupStandings[g] || {};
+    const teams = [...set];
+    if (!teams.every(t => (gs[t]?.gp ?? 0) >= 3)) continue; // group not fully played
+    const tup = t => { const s = gs[t] || { pts: 0, gf: 0, ga: 0 }; return [s.pts, s.gf - s.ga, s.gf]; };
+    // >0 ⇒ a strictly better than b on pts, then GD, then GF (the deterministic keys).
+    const cmp = (a, b) => (a[0] - b[0]) || (a[1] - b[1]) || (a[2] - b[2]);
+    for (const t of teams) {
+      const tt = tup(t);
+      // Guaranteed top-2 ⇔ at most one other team is equal-or-better (ties count
+      // against, so a genuine lot-drawing tie for 2nd/3rd is NOT treated as locked).
+      const notWorse = teams.filter(o => o !== t && cmp(tup(o), tt) >= 0).length;
+      if (notWorse <= 1) out.add(t);
+    }
+  }
+  return out;
+}
+
 // Per-WC-team display stage: { stage, live }. Settled teams use their finalised
 // stage; live teams use the floor of their current round (see KO_ROUND_FLOOR).
 function computeWcCurrentStages(state, wcTeamStage) {
@@ -1007,6 +1033,7 @@ function computeWcCurrentStages(state, wcTeamStage) {
   }
   const inR32 = new Set();
   for (const [a, b] of (state.r32Actual || [])) { inR32.add(a); inR32.add(b); }
+  const guaranteedR32 = computeGuaranteedR32(state);
 
   const out = {};
   for (const wc of new Set(Object.values(FANTASY_TEAMS).flat())) {
@@ -1014,7 +1041,7 @@ function computeWcCurrentStages(state, wcTeamStage) {
     const won = maxWon[wc];
     let stage;
     if (won && KO_ROUND_FLOOR[won] !== undefined) stage = KO_ROUND_FLOOR[won];
-    else if (inR32.has(wc)) stage = STAGE.R32_ELIMINATED; // qualified, awaiting/in R32
+    else if (inR32.has(wc) || guaranteedR32.has(wc)) stage = STAGE.R32_ELIMINATED; // qualified, awaiting/in R32
     else stage = STAGE.GROUP_ELIMINATED;                  // still in the group stage
     out[wc] = { stage, live: true };
   }
