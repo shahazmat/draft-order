@@ -409,15 +409,21 @@ function rankFantasyTeams(stage, stats) {
 }
 
 function runMonteCarlo(state, N = 10000) {
-  seedRng(state.completedCount * 31337);
+  // Fixed seed (NOT tied to results): the only thing that should move the numbers
+  // between snapshots is new match results, never Monte Carlo resampling noise.
+  // index.html must use this SAME constant so the live grid reconciles with the chart.
+  seedRng(20260611);
   const teams = Object.keys(FANTASY_TEAMS);
   const counts = {};
   for (const t of teams) counts[t] = new Array(16).fill(0);
+  const orderCounts = {};
 
   for (let i = 0; i < N; i++) {
     const { stage, stats } = runOneSimulation(state);
     const ranked = rankFantasyTeams(stage, stats);
     ranked.forEach((team, idx) => counts[team][idx]++);
+    const key = ranked.join('|');
+    orderCounts[key] = (orderCounts[key] || 0) + 1;
   }
 
   const probs = {}, adp = {};
@@ -425,7 +431,17 @@ function runMonteCarlo(state, N = 10000) {
     probs[t] = counts[t].map(c => parseFloat(((c / N) * 100).toFixed(2)));
     adp[t] = parseFloat((counts[t].reduce((sum, c, i) => sum + c * (i + 1), 0) / N).toFixed(3));
   }
-  return { probs, adp };
+
+  // Most common full draft orders. Ties (equal frequency) are broken by smallest
+  // total absolute deviation from ADP — the ordering closest to expectation ranks first.
+  const deviation = order => order.reduce((sum, t, i) => sum + Math.abs((i + 1) - adp[t]), 0);
+  const topOrders = Object.entries(orderCounts)
+    .map(([key, cnt]) => ({ order: key.split('|'), cnt }))
+    .sort((a, b) => b.cnt - a.cnt || deviation(a.order) - deviation(b.order))
+    .slice(0, 10)
+    .map(({ order, cnt }) => ({ order, pct: parseFloat(((cnt / N) * 100).toFixed(2)) }));
+
+  return { probs, adp, topOrders };
 }
 
 // ─── MAIN ─────────────────────────────────────────────────────────────────────
@@ -482,8 +498,8 @@ async function main() {
     });
 
     const state = parseTournamentState(modifiedEvents);
-    const { probs, adp } = runMonteCarlo(state, 10000);
-    snapshots.push({ matchesCompleted: k, probs, adp });
+    const { probs, adp, topOrders } = runMonteCarlo(state, 10000);
+    snapshots.push({ matchesCompleted: k, probs, adp, topOrders });
 
     process.stdout.write(`\r  computed snapshot ${k}/${completedEvents.length}`);
   }

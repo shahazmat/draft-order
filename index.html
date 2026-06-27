@@ -863,7 +863,10 @@ function rankFantasyTeams(stage, stats) {
 }
 
 function runMonteCarlo(state, N = 10000) {
-  seedRng(state.completedCount);
+  // Fixed seed (NOT tied to results): the only thing that should move the numbers
+  // between snapshots is new match results, never Monte Carlo resampling noise.
+  // Must match the constant in generate-history.js so the grid reconciles with the chart.
+  seedRng(20260611);
   const teams = Object.keys(FANTASY_TEAMS);
   const counts = {};
   for (const t of teams) counts[t] = new Array(16).fill(0);
@@ -884,10 +887,14 @@ function runMonteCarlo(state, N = 10000) {
     adp[t] = counts[t].reduce((sum, c, i) => sum + c * (i + 1), 0) / N;
   }
 
+  // Most common full draft orders. Ties (equal frequency) are broken by smallest
+  // total absolute deviation from ADP — the ordering closest to expectation ranks first.
+  const deviation = order => order.reduce((sum, t, i) => sum + Math.abs((i + 1) - adp[t]), 0);
   const topOrders = Object.entries(orderCounts)
-    .sort((a, b) => b[1] - a[1])
+    .map(([key, cnt]) => ({ order: key.split('|'), cnt }))
+    .sort((a, b) => b.cnt - a.cnt || deviation(a.order) - deviation(b.order))
     .slice(0, 10)
-    .map(([key, cnt]) => ({ order: key.split('|'), pct: (cnt / N) * 100 }));
+    .map(({ order, cnt }) => ({ order, pct: (cnt / N) * 100 }));
 
   return { probs, topOrders, adp };
 }
@@ -1221,9 +1228,23 @@ async function refresh() {
     // Run simulation asynchronously so browser can update the status text
     await new Promise(resolve => setTimeout(resolve, 30));
 
-    const t0 = performance.now();
-    const { probs, topOrders, adp } = runMonteCarlo(state, 10000);
-    lastSimCO2ug = calcSimCO2(performance.now() - t0);
+    // Prefer the committed snapshot when it covers exactly the current number of
+    // completed games — then the grid is identical to the chart's right-most point
+    // BY CONSTRUCTION (same data, not a re-simulation). Only fall back to a live
+    // simulation when the live read is AHEAD of the latest snapshot (a game finished
+    // since the last regen), in which case it legitimately has newer information.
+    const snap = (window.HISTORY_DATA?.snapshots || []).find(
+      s => s.matchesCompleted === state.completedCount && s.topOrders);
+    let probs, topOrders, adp, usedSnapshot = false;
+    if (snap) {
+      ({ probs, adp, topOrders } = snap);
+      lastSimCO2ug = 0;
+      usedSnapshot = true;
+    } else {
+      const t0 = performance.now();
+      ({ probs, topOrders, adp } = runMonteCarlo(state, 10000));
+      lastSimCO2ug = calcSimCO2(performance.now() - t0);
+    }
     const currentEstimate = getBestEstimate(state);
 
     lastProbs = probs;
@@ -1251,7 +1272,9 @@ async function refresh() {
     }
     const missing = [...knownTeams].filter(t => !seenTeams.has(t));
     const simInfoEl = document.getElementById('sim-info');
-    let infoText = `Monte Carlo: 10,000 simulations · FIFA ranking-weighted goal model · Strength-weighted penalty shootouts`;
+    let infoText = usedSnapshot
+      ? `Showing committed snapshot for ${state.completedCount} games (matches the history chart exactly) · 10,000-simulation Monte Carlo`
+      : `Live Monte Carlo: 10,000 simulations · FIFA ranking-weighted goal model · Strength-weighted penalty shootouts`;
     if (missing.length > 0) {
       infoText += ` · ⚠ Teams not found in ESPN data: ${missing.join(', ')}`;
     }
