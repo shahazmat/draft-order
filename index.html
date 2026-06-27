@@ -190,6 +190,13 @@
     .score-row.score-goals { color: #8aa0b8; }
     .score-row.score-goals .sv { color: #cbd5e1; }
     .score-div { height: 1px; background: rgba(187,185,185,0.15); margin: 2px 0; }
+    .sc-row { align-items: center; gap: 4px; }
+    .sc-label { color: #8aa0b8; flex-shrink: 0; }
+    .sc-flags { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 3px; margin-left: auto; }
+    .sc-flag { width: 14px; height: 10px; border-radius: 2px; object-fit: cover; display: block; box-shadow: 0 0 0 1px rgba(0,0,0,0.4); }
+    .sc-flag-ph { display: flex; align-items: center; justify-content: center; background: #1e293b; color: #94a3b8; font-size: 0.5rem; font-weight: 700; box-shadow: none; }
+    .sc-flag-live { animation: flagPulse 1.3s ease-in-out infinite; }
+    @keyframes flagPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 
     .hidden { display: none !important; }
     #dd-full { margin-top: 0.6rem; background: #050505; border: 1px solid rgba(187,185,185,0.15); border-radius: 6px; overflow: hidden; }
@@ -274,6 +281,7 @@
       .order-logo { width: 28px; height: 28px; }
       .order-chip { width: 62px; min-width: 62px; padding: 4px 5px; }
       .score-row { font-size: 0.55rem; }
+      .sc-flag { width: 12px; height: 9px; }
       .prob-cell { width: 62px; min-width: 62px; }
       .prob-cell { width: 50px; min-width: 50px; font-size: 0.68rem; }
     }
@@ -638,7 +646,7 @@ function parseTournamentState(events) {
 
         const loser  = homeWin ? away : (awayWin ? home : null);
         const winner = homeWin ? home : (awayWin ? away : null);
-        if (winner) koResults.push({ a: home, b: away, winner });
+        if (winner) koResults.push({ a: home, b: away, winner, round });
 
         if (round === 'FINAL') {
           if (loser)  knockoutEliminated[loser]  = STAGE.RUNNER_UP;
@@ -960,39 +968,90 @@ function heatColor(pct) {
 // ─── TOP ORDERS RENDER ───────────────────────────────────────────────────────
 const LOCK_THRESHOLD = 99; // % — position is considered locked in
 
-// Scorecard rows in display order, each mapped to the STAGE enum value that counts
-// toward it. Only teams with a FINALISED placement are counted — a team that is
-// still alive (no settled stage) contributes to no bucket until it's eliminated or
-// wins the tournament. (There's no 'SF' row: semifinal losers always finish 3rd or
-// 4th via the third-place match, so it would be redundant.)
+// Scorecard rows in display order, each mapped to the STAGE enum value bucketed
+// into it. A row collects the FLAGS of this fantasy team's WC teams that belong
+// there: settled teams (solid) sit in the stage they finished at; live teams
+// (pulsing) sit in the guaranteed-FLOOR stage of the round they're currently in.
+// (There's no 'SF' row: live semifinalists fall into the '4th' floor and settled
+// semifinal losers finish 3rd/4th via the third-place match.)
 const SCORE_STAGES = [
   ['1st', STAGE.WINNER], ['2nd', STAGE.RUNNER_UP], ['3rd', STAGE.SF_WON_3RD], ['4th', STAGE.SF_LOST_3RD],
   ['QF', STAGE.QF_ELIMINATED], ['R16', STAGE.R16_ELIMINATED], ['R32', STAGE.R32_ELIMINATED],
   ['G', STAGE.GROUP_ELIMINATED],
 ];
 
-// Live (not simulated) scorecard for one fantasy team: how many of its 3 WC teams
-// have finalised at each stage, plus cumulative goals for / against.
-function teamScorecard(team, state, wcTeamStage) {
-  const byStage = {}; // STAGE value -> count of this team's WC teams settled there
-  let gf = 0, ga = 0;
-  for (const wc of FANTASY_TEAMS[team]) {
-    const s = wcTeamStage[wc];
-    if (s !== undefined) byStage[s] = (byStage[s] || 0) + 1;
-    gf += state.allTeamStats[wc]?.gf || 0;
-    ga += state.allTeamStats[wc]?.ga || 0;
+// A live team is placed in the guaranteed-floor stage of the round it's currently
+// playing: the worst finish it can still have. Keyed by the furthest round it has
+// WON (winning round R advances it to round R+1, whose loser-floor is the value).
+const KO_ROUND_FLOOR = {
+  R32: STAGE.R16_ELIMINATED,   // won R32 → in R16, floor = R16 out
+  R16: STAGE.QF_ELIMINATED,    // won R16 → in QF,  floor = QF out
+  QF:  STAGE.SF_LOST_3RD,      // won QF  → in SF,  floor = 4th
+  SF:  STAGE.RUNNER_UP,        // won SF  → in Final, floor = runner-up
+};
+const KO_ROUND_RANK = { GROUP: 0, R32: 1, R16: 2, QF: 3, SF: 4, THIRD: 4, FINAL: 5 };
+
+// Per-WC-team display stage: { stage, live }. Settled teams use their finalised
+// stage; live teams use the floor of their current round (see KO_ROUND_FLOOR).
+function computeWcCurrentStages(state, wcTeamStage) {
+  const maxWon = {}; // team → furthest KO round won
+  for (const r of (state.koResults || [])) {
+    if (!r.winner) continue;
+    if (!(r.winner in maxWon) || KO_ROUND_RANK[r.round] > KO_ROUND_RANK[maxWon[r.winner]]) {
+      maxWon[r.winner] = r.round;
+    }
   }
-  return { byStage, gf, ga };
+  const inR32 = new Set();
+  for (const [a, b] of (state.r32Actual || [])) { inR32.add(a); inR32.add(b); }
+
+  const out = {};
+  for (const wc of new Set(Object.values(FANTASY_TEAMS).flat())) {
+    if (wcTeamStage[wc] !== undefined) { out[wc] = { stage: wcTeamStage[wc], live: false }; continue; }
+    const won = maxWon[wc];
+    let stage;
+    if (won && KO_ROUND_FLOOR[won] !== undefined) stage = KO_ROUND_FLOOR[won];
+    else if (inR32.has(wc)) stage = STAGE.R32_ELIMINATED; // qualified, awaiting/in R32
+    else stage = STAGE.GROUP_ELIMINATED;                  // still in the group stage
+    out[wc] = { stage, live: true };
+  }
+  return out;
+}
+
+function scFlag(wc, live) {
+  const url = flagUrl(wc);
+  const cls = `sc-flag${live ? ' sc-flag-live' : ''}`;
+  const title = `${wc}${live ? ' · still in' : ''}`;
+  return url
+    ? `<img class="${cls}" src="${url}" alt="${wc}" title="${title}">`
+    : `<span class="${cls} sc-flag-ph" title="${title}">${wc.slice(0, 2)}</span>`;
 }
 
 function scorecardHtml(team) {
   if (!lastState) return '';
   const wcTeamStage = lastWcTeamStage || computeWcTeamStage(lastState);
-  const { byStage, gf, ga } = teamScorecard(team, lastState, wcTeamStage);
+  const current = computeWcCurrentStages(lastState, wcTeamStage);
+
+  let gf = 0, ga = 0;
+  const byStage = {}; // STAGE value -> [{ wc, live }]
+  for (const wc of FANTASY_TEAMS[team]) {
+    const { stage, live } = current[wc];
+    (byStage[stage] = byStage[stage] || []).push({ wc, live });
+    gf += lastState.allTeamStats[wc]?.gf || 0;
+    ga += lastState.allTeamStats[wc]?.ga || 0;
+  }
+
   const rows = SCORE_STAGES.map(([label, stage]) => {
-    const n = byStage[stage] || 0;
-    return `<div class="score-row${n === 0 ? ' score-zero' : ''}"><span>${label}</span><span class="sv">${n === 0 ? '-' : n}</span></div>`;
+    const teams = byStage[stage];
+    const empty = !teams;
+    const flags = empty
+      ? '<span class="sv">-</span>'
+      : teams
+          .sort((a, b) => a.live - b.live) // settled (solid) before live (pulsing)
+          .map(({ wc, live }) => scFlag(wc, live))
+          .join('');
+    return `<div class="score-row sc-row${empty ? ' score-zero' : ''}"><span class="sc-label">${label}</span><span class="sc-flags">${flags}</span></div>`;
   }).join('');
+
   return `<div class="score-card">
     ${rows}
     <div class="score-div"></div>
