@@ -8,8 +8,17 @@ against live ESPN match data.
 
 ## Files
 
-- `index.html` — the entire app (UI, simulation engine, live ESPN fetch). Open it
-  directly in a browser; no build step.
+- `index.html` — page shell. Open it directly in a browser; no build step
+  (classic scripts only, so `file://` works).
+- `styles.css` — broadcast-studio theme.
+- `js/data.js` — fantasy allocations, FIFA strengths, flag codes.
+- `js/engine.js` — simulation engine (PRNG, ESPN fetch/parsing, real FIFA 2026
+  bracket, Monte Carlo). **Duplicated in `generate-history.js` — keep in sync**
+  (see `memory/dual-engine-sync.md`).
+- `js/ui.js` — chip stage, tickers, heat grid, scorecards, top-10 panel.
+- `js/surface.js` — 3D probability surface view.
+- `js/history.js` — the "Draft Pick Probability Over Time" Chart.js chart.
+- `js/app.js` — state, refresh loop, view wiring.
 - `generate-history.js` — Node script that produces `history-data.js` for the
   "Draft Pick Probability Over Time" line chart.
 - `history-data.js` — generated data consumed by the chart (sets

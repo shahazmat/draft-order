@@ -1,18 +1,19 @@
 ---
 name: dual-engine-sync
-description: The Monte Carlo engine is duplicated in index.html and generate-history.js; changes must be mirrored and force-regen run
+description: The Monte Carlo engine is duplicated in js/engine.js (browser) and generate-history.js (Node); changes must be mirrored and force-regen run
 metadata:
   type: project
 ---
 
 The draft-order simulation engine exists as TWO near-identical copies: the live
-in-browser one in `index.html` and the Node one in `generate-history.js`. Any
-change to the model (group sim, knockout bracket, seeding, tiebreakers, STAGE
-logic) MUST be applied identically to both files or the line chart will disagree
-with the live grid.
+in-browser one in `js/engine.js` (plus team data in `js/data.js`) and the Node
+one in `generate-history.js`. Any change to the model (group sim, knockout
+bracket, seeding, tiebreakers, STAGE logic) MUST be applied identically to both
+or the line chart will disagree with the live grid.
 
-**Why:** there is no build step / shared module — `index.html` runs from `file://`
-and `generate-history.js` runs in CI, so they can't import shared code.
+**Why:** there is no build step / shared module — the page runs from `file://`
+(classic scripts, no ES modules) and `generate-history.js` runs in CI, so they
+can't import shared code.
 
 **How to apply:** after a model change, run `node generate-history.js --force` to
 recompute every snapshot (the incremental cache is only valid when the model is
