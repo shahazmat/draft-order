@@ -167,7 +167,8 @@ const teamIconPlugin = {
   },
 };
 
-// Match-swing markers (dashed gold line + flag/score chip) and replay playhead
+// Match-swing markers (dashed gold line + flag/score chip), model-change
+// series breaks, and the replay playhead
 const historyOverlayPlugin = {
   id: 'historyOverlay',
   afterDatasetsDraw(chart) {
@@ -175,6 +176,31 @@ const historyOverlayPlugin = {
     const xs = scales.x;
     if (!xs || !chartArea) return;
     ctx.save();
+
+    // Series breaks: snapshots left of the line were computed under the old
+    // model and were deliberately not regenerated — the discontinuity is real.
+    for (const b of (historyData?.breaks || [])) {
+      if (replayK !== null && b.after > replayK) continue;
+      const x = xs.getPixelForValue(b.after); // line sits ON the last old-model snapshot
+      if (x < chartArea.left - 1 || x > chartArea.right + 1) continue;
+      ctx.strokeStyle = 'rgba(248, 113, 113, 0.55)';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([7, 5]);
+      ctx.beginPath();
+      ctx.moveTo(x, chartArea.top);
+      ctx.lineTo(x, chartArea.bottom);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.save();
+      ctx.translate(x - 4, (chartArea.top + chartArea.bottom) / 2);
+      ctx.rotate(-Math.PI / 2);
+      ctx.fillStyle = 'rgba(248, 113, 113, 0.9)';
+      ctx.font = '600 9px Oswald, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(b.label || 'MODEL CHANGE', 0, 0);
+      ctx.restore();
+    }
 
     const CHIP_W = 56, CHIP_H = 16;
     let lastChipRight = -Infinity;
@@ -642,6 +668,21 @@ function drawSparklines() {
     ctx.closePath();
     ctx.fillStyle = 'rgba(0, 118, 182, 0.18)';
     ctx.fill();
+
+    // Model-change series break tick (matches the main chart's red line)
+    for (const b of (historyData?.breaks || [])) {
+      const idx = snaps.findIndex(s => s.matchesCompleted === b.after);
+      if (idx < 0) continue;
+      const bx = X(idx);
+      ctx.strokeStyle = 'rgba(248, 113, 113, 0.5)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(bx, 0);
+      ctx.lineTo(bx, h);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
 
     ctx.beginPath();
     ctx.arc(X(vals.length - 1), Y(vals[vals.length - 1]), 2.5, 0, Math.PI * 2);
