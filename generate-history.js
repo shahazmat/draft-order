@@ -9,6 +9,17 @@ const { writeFileSync, existsSync, readFileSync } = require('fs');
 
 const FORCE = process.argv.includes('--force');
 
+// Points where the simulation model changed. Snapshots up to `after` matches
+// were computed under the previous model and are intentionally NOT regenerated
+// (run WITHOUT --force so they're reused); the timeline charts draw a
+// series-break line at each of these match counts.
+// 2026-07-08: goal model went from (S/AVG)^4 vs tournament average to
+// head-to-head (S1/S2)^2, and the 8 QF survivors' ELOs were recalibrated to
+// betting-market title odds.
+const MODEL_BREAKS = [
+  { after: 96, label: 'MODEL CHANGE' },
+];
+
 // Load existing snapshots (keyed by matchesCompleted) so we can skip re-running them.
 function loadExistingSnapshots() {
   if (FORCE || !existsSync('history-data.js')) return new Map();
@@ -45,15 +56,15 @@ const FANTASY_TEAMS = {
   'Pat':           ['Morocco', 'Croatia', 'Paraguay'],
 };
 
-// ─── TEAM STRENGTHS ──────────────────────────────────────────────────────────
+// ─── TEAM STRENGTHS (QF survivors market-calibrated 2026-07-08, see js/data.js) ─
 const TEAM_STRENGTH = {
-  'Argentina': 1877, 'Spain': 1875, 'France': 1871, 'England': 1828,
-  'Portugal': 1768, 'Brazil': 1766, 'Netherlands': 1740, 'Belgium': 1725,
+  'Argentina': 1819, 'Spain': 1856, 'France': 1986, 'England': 1827,
+  'Portugal': 1768, 'Brazil': 1766, 'Netherlands': 1740, 'Belgium': 1588,
   'Germany': 1715, 'Croatia': 1700, 'Italy': 1685, 'Uruguay': 1670,
-  'Colombia': 1655, 'Morocco': 1640, 'USA': 1625, 'Mexico': 1610,
-  'Japan': 1600, 'Switzerland': 1590, 'Senegal': 1580, 'Iran': 1570,
+  'Colombia': 1655, 'Morocco': 1602, 'USA': 1625, 'Mexico': 1610,
+  'Japan': 1600, 'Switzerland': 1560, 'Senegal': 1580, 'Iran': 1570,
   'South Korea': 1560, 'Ecuador': 1550, 'Australia': 1535, 'Austria': 1525,
-  'Türkiye': 1515, 'Denmark': 1505, 'Norway': 1500, 'Canada': 1490,
+  'Türkiye': 1515, 'Denmark': 1505, 'Norway': 1667, 'Canada': 1490,
   'Sweden': 1515, 'Ivory Coast': 1533, 'Ghana': 1485, 'Paraguay': 1503,
   'Algeria': 1470, 'Tunisia': 1483, 'Panama': 1541, 'Qatar': 1450,
   'Egypt': 1460, 'Saudi Arabia': 1445, 'Scotland': 1498, 'South Africa': 1430,
@@ -65,9 +76,10 @@ const TEAM_STRENGTH = {
 const AVG_STRENGTH = Object.values(TEAM_STRENGTH).reduce((a, b) => a + b, 0) / Object.values(TEAM_STRENGTH).length;
 
 function getStrength(team) { return TEAM_STRENGTH[team] || AVG_STRENGTH; }
-function goalLambda(team) {
-  const ratio = getStrength(team) / AVG_STRENGTH;
-  return Math.max(0.3, Math.min(4.0, 1.3 * ratio * ratio * ratio * ratio));
+// λ = 1.3 × (S_team/S_opp)² — head-to-head ratio model, MUST match js/data.js
+function goalLambda(team, opp) {
+  const ratio = getStrength(team) / getStrength(opp);
+  return Math.max(0.3, Math.min(4.0, 1.3 * ratio * ratio));
 }
 
 // ─── ESPN NAME NORMALIZATION ──────────────────────────────────────────────────
@@ -292,10 +304,10 @@ function simulateBracket(seeded, statsOf, knownWinner, live = null) {
       ((t1 === live.home && t2 === live.away) || (t1 === live.away && t2 === live.home));
     let hg, ag;
     if (isWatched) {
-      hg = (t1 === live.home ? live.hg : live.ag) + poisson(goalLambda(t1) * live.remFrac);
-      ag = (t2 === live.home ? live.hg : live.ag) + poisson(goalLambda(t2) * live.remFrac);
+      hg = (t1 === live.home ? live.hg : live.ag) + poisson(goalLambda(t1, t2) * live.remFrac);
+      ag = (t2 === live.home ? live.hg : live.ag) + poisson(goalLambda(t2, t1) * live.remFrac);
     } else {
-      hg = poisson(goalLambda(t1)); ag = poisson(goalLambda(t2));
+      hg = poisson(goalLambda(t1, t2)); ag = poisson(goalLambda(t2, t1));
     }
     const s1 = getStrength(t1), s2 = getStrength(t2);
     const pens = hg === ag;
@@ -344,8 +356,8 @@ function runOneSimulation(state, live = null) {
   for (const g of groupGames) {
     if (g.done || !g.group) continue;
     const isWatched = live && !live.isKO && g.home === live.home && g.away === live.away;
-    const hg = isWatched ? live.hg + poisson(goalLambda(g.home) * live.remFrac) : poisson(goalLambda(g.home));
-    const ag = isWatched ? live.ag + poisson(goalLambda(g.away) * live.remFrac) : poisson(goalLambda(g.away));
+    const hg = isWatched ? live.hg + poisson(goalLambda(g.home, g.away) * live.remFrac) : poisson(goalLambda(g.home, g.away));
+    const ag = isWatched ? live.ag + poisson(goalLambda(g.away, g.home) * live.remFrac) : poisson(goalLambda(g.away, g.home));
     if (isWatched) watched = { outcome: hg > ag ? 'H' : ag > hg ? 'A' : 'D', pens: false };
     if (!st[g.group]) st[g.group] = {};
     const gs = st[g.group];
@@ -575,6 +587,7 @@ async function main() {
   const output = {
     generated: new Date().toISOString(),
     totalMatches: completedEvents.length,
+    breaks: MODEL_BREAKS,
     matches,
     snapshots,
   };

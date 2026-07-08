@@ -76,25 +76,30 @@ const FANTASY_TEAMS = {
 };
 
 // ─── TEAM STRENGTHS (FIFA ranking points, approx. June 2026) ────────────────
+// The 8 QF-stage survivors were recalibrated 2026-07-08 so the simulated
+// P(win World Cup) matches betting-market implied odds (France 31.4%,
+// Spain 19.5%, Argentina 17.6%, England 16%, Norway 5.9%, Belgium 3.4%,
+// Morocco 3.4%, Switzerland 2.8%), holding their combined total constant.
+// Eliminated teams keep FIFA points (they no longer affect any simulation).
 const TEAM_STRENGTH = {
-  'Argentina':            1877,
-  'Spain':                1875,
-  'France':               1871,
-  'England':              1828,
+  'Argentina':            1819,
+  'Spain':                1856,
+  'France':               1986,
+  'England':              1827,
   'Portugal':             1768,
   'Brazil':               1766,
   'Netherlands':          1740,
-  'Belgium':              1725,
+  'Belgium':              1588,
   'Germany':              1715,
   'Croatia':              1700,
   'Italy':                1685,
   'Uruguay':              1670,
   'Colombia':             1655,
-  'Morocco':              1640,
+  'Morocco':              1602,
   'USA':                  1625,
   'Mexico':               1610,
   'Japan':                1600,
-  'Switzerland':          1590,
+  'Switzerland':          1560,
   'Senegal':              1580,
   'Iran':                 1570,
   'South Korea':          1560,
@@ -103,7 +108,7 @@ const TEAM_STRENGTH = {
   'Austria':              1525,
   'Türkiye':              1515,
   'Denmark':              1505,
-  'Norway':               1500,
+  'Norway':               1667,
   'Canada':               1490,
   'Sweden':               1515,
   'Ivory Coast':          1533,
@@ -135,12 +140,15 @@ function getStrength(team) {
   return TEAM_STRENGTH[team] || AVG_STRENGTH;
 }
 
-// Lambda for Poisson goal model scaled by team strength.
-// Squared ratio amplifies the gap between strong and weak teams —
-// linear scaling was too compressed (Spain vs Cabo Verde looked nearly even).
-function goalLambda(team) {
-  const ratio = getStrength(team) / AVG_STRENGTH;
-  return Math.max(0.3, Math.min(4.0, 1.3 * ratio * ratio * ratio * ratio));
+// Lambda for Poisson goal model from the head-to-head strength ratio.
+// λ = 1.3 × (S_team/S_opp)²: the λ ratio within a pairing is (S1/S2)⁴ — the
+// same win-prob spread as the old (S/AVG)⁴ tournament-average model — but
+// scoring rates now respond to the opponent: minnows are suppressed by strong
+// defenses, favorites inflate against weak ones, and λ1×λ2 is constant so
+// mismatches are high-scoring while even matchups play tight.
+function goalLambda(team, opp) {
+  const ratio = getStrength(team) / getStrength(opp);
+  return Math.max(0.3, Math.min(4.0, 1.3 * ratio * ratio));
 }
 
 // ESPN display name → canonical name used above

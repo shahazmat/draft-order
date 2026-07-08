@@ -287,10 +287,10 @@ function simulateBracket(seeded, statsOf, knownWinner, live = null) {
       ((t1 === live.home && t2 === live.away) || (t1 === live.away && t2 === live.home));
     let hg, ag;
     if (isWatched) {
-      hg = (t1 === live.home ? live.hg : live.ag) + poisson(goalLambda(t1) * live.remFrac);
-      ag = (t2 === live.home ? live.hg : live.ag) + poisson(goalLambda(t2) * live.remFrac);
+      hg = (t1 === live.home ? live.hg : live.ag) + poisson(goalLambda(t1, t2) * live.remFrac);
+      ag = (t2 === live.home ? live.hg : live.ag) + poisson(goalLambda(t2, t1) * live.remFrac);
     } else {
-      hg = poisson(goalLambda(t1)); ag = poisson(goalLambda(t2));
+      hg = poisson(goalLambda(t1, t2)); ag = poisson(goalLambda(t2, t1));
     }
     const s1 = getStrength(t1), s2 = getStrength(t2);
     const pens = hg === ag;
@@ -344,8 +344,8 @@ function runOneSimulation(state, live = null) {
   for (const g of groupGames) {
     if (g.done || !g.group) continue;
     const isWatched = live && !live.isKO && g.home === live.home && g.away === live.away;
-    const hg = isWatched ? live.hg + poisson(goalLambda(g.home) * live.remFrac) : poisson(goalLambda(g.home));
-    const ag = isWatched ? live.ag + poisson(goalLambda(g.away) * live.remFrac) : poisson(goalLambda(g.away));
+    const hg = isWatched ? live.hg + poisson(goalLambda(g.home, g.away) * live.remFrac) : poisson(goalLambda(g.home, g.away));
+    const ag = isWatched ? live.ag + poisson(goalLambda(g.away, g.home) * live.remFrac) : poisson(goalLambda(g.away, g.home));
     if (isWatched) watched = { outcome: hg > ag ? 'H' : ag > hg ? 'A' : 'D', pens: false };
     if (!st[g.group]) st[g.group] = {};
     const gs = st[g.group];
